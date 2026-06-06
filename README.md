@@ -13,6 +13,8 @@ The following software and libraries are required:
 - MATLAB R2018a  
 - CVX (for MATLAB)
 - CVXPY (for Python)
+- CVXPYLayers
+- Moreau
 
 
 ### Repository Structure
@@ -26,18 +28,24 @@ The following software and libraries are required:
 │   │   (PyTorch implementation of the dual-form ADMM solver for NNLS.)
 │   ├── nnls_dual_loss_learning_refer_to_cvxpy_with_pytorch.py
 │   │   (Learning framework for NNLS using CVXPY solutions as references.)
-│   └── nnls_dual_multiGPU_admm_with_pytorch.py
-│       (Multi-GPU ADMM implementation for large-scale NNLS.)
+│   ├── nnls_dual_multiGPU_admm_with_pytorch.py
+│   │   (Multi-GPU ADMM implementation for large-scale NNLS.)
+│   └── nnls_signal_recovery_cvxpylayers_with_moreau_as_solver_gpu.py
+│       (Differentiable NNLS signal recovery using CVXPYLayers with Moreau backend.)
 │
 ├── case_studies/
 │   ├── diet_dladmm_learning_with_cvxpy.py
 │   ├── diet_dladmm_with_cvxpy.py
 │   ├── diet_pdhg_with_cvxpy.py
-│   │   (Three methods for solving the Stigler Diet problem.)
+|   ├── diet_with_moreau_vs_cvxpy.py
+│   │   (Four methods for solving the Stigler Diet problem.)
 │   ├── nnv_with_cvxpy.py
 │   │   (Solving the neural network verification problem.)
+│   ├── sumrate_perron_frobenius_with_moreau_vs_cvxpy.py
+│   │   (Solving the sum-rate maximization problem using CVXPYLayers with Moreau backend.)
 │   ├── opf_with_cvxpy.py
-│   │   (Solving the optimal power flow problem.)
+│   ├── opf_with_pd_moreau_cvxpy.py
+│   │   (Solving the optimal power flow problem via CVXPY and Moreau.)
 │   └── lrmp_with_cvx_verify_general_solution.m
 │       (MATLAB script verifying the dual-driven primal solution reconstruction for LR-NNLS.)
 │
