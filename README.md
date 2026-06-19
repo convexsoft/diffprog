@@ -43,7 +43,7 @@ The following software and libraries are required:
 │   │   (Four methods for solving the Stigler Diet problem.)
 │   ├── nnv_with_cvxpy.py
 │   │   (Solving the neural network verification problem.)
-│   ├── sumrate_perron_frobenius_with_moreau_vs_cvxpy.py
+│   ├── sumrate_with_moreau_vs_cvxpy.py
 │   │   (Solving the sum-rate maximization problem using CVXPYLayers with Moreau backend.)
 │   ├── opf_with_cvxpy.py
 │   ├── opf_with_pd_moreau_cvxpy.py
