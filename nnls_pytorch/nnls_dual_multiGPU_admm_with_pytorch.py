@@ -6,9 +6,6 @@ import torch.distributed as dist
 import cvxpy as cp
 
 
-# ==========================================================
-# 0) Correct recovery (active-set from mu)
-# ==========================================================
 def recover_x_from_mu_active_set(
     A: np.ndarray,
     b: np.ndarray,
@@ -32,7 +29,7 @@ def recover_x_from_mu_active_set(
             x_F, *_ = np.linalg.lstsq(A[:, idx], b, rcond=None)
             x[idx] = x_F
 
-        # If any negative in free set, drop them (classic cleanup)
+        # If any negative in free set, drop them
         neg = np.where(x < 0)[0]
         if neg.size > 0:
             F[neg] = False
@@ -58,11 +55,6 @@ def recover_x_from_mu_active_set(
 # ==========================================================
 def solve_nnls_cvxpy(A: np.ndarray, b: np.ndarray,
                     solver_preference=("OSQP", "ECOS", "SCS")) -> Dict[str, np.ndarray]:
-    """
-    Solve NNLS primal:
-        min_x 0.5||Ax-b||^2  s.t. x>=0
-    Return x_star and useful duals (KKT-reconstructed).
-    """
     m, n = A.shape
     x = cp.Variable(n, nonneg=True)
     obj = 0.5 * cp.sum_squares(A @ x - b)
@@ -115,10 +107,6 @@ def allreduce_sum_(x: torch.Tensor):
         dist.all_reduce(x, op=dist.ReduceOp.SUM)
 
 def setup_distributed_from_env():
-    """
-    Works with:
-      torchrun --nproc_per_node=NUM_GPUS script.py
-    """
     if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
         rank = int(os.environ["RANK"])
         world_size = int(os.environ["WORLD_SIZE"])
@@ -138,84 +126,81 @@ def nnls_dual_admm_batch_distributed(
     B_local: torch.Tensor,   # (N_local, m)    on this rank
     N_total: int,
     rho: float = 1.0,
-    rho_c: float = 1.0,
     max_iter: int = 2000,
     eps_abs: float = 1e-7,
     eps_rel: float = 1e-7,
     verbose: bool = True,
 ) -> Dict[str, torch.Tensor]:
-    """
-    Distributed consensus ADMM (block-splitting).
-    Each rank holds a subset of blocks. We compute global Z by averaging via all_reduce.
-    """
-
     assert A_local.ndim == 3 and B_local.ndim == 2
     device = A_local.device
     dtype = A_local.dtype
 
     N_local, m, n = A_local.shape
-    A_T = A_local.transpose(1, 2)            # (N_local, n, m)
-    AAT = torch.bmm(A_local, A_T)            # (N_local, m, m)
+    A_T = A_local.transpose(1, 2)       # (N_local, n, m)
+    AAT = torch.bmm(A_local, A_T)       # (N_local, m, m)
 
-    # ADMM variables on each rank
+    # ADMM variables
     Lambda = torch.zeros((N_local, m), dtype=dtype, device=device)
-    Z_i    = torch.zeros((N_local, n), dtype=dtype, device=device)
-    U      = torch.zeros((N_local, n), dtype=dtype, device=device)
-    V      = torch.zeros((N_local, n), dtype=dtype, device=device)
+    Z_i = torch.zeros((N_local, n), dtype=dtype, device=device)
+    U = torch.zeros((N_local, n), dtype=dtype, device=device)
 
-    # Global consensus variable (replicated on each rank)
-    Z = torch.zeros(n, dtype=dtype, device=device)
-
-    # Pre-factorize (I + rho A A^T) for each local block
-    I_m = torch.eye(m, dtype=dtype, device=device).unsqueeze(0)  # (1,m,m)
-    M = I_m + rho * AAT                                          # (N_local,m,m)
+    # Pre-factorize I + rho A_i A_i^T
+    I_m = torch.eye(m, dtype=dtype, device=device).unsqueeze(0)
+    M = I_m + rho * AAT
     L = torch.linalg.cholesky(M)
 
-    coeff_rho = rho / (rho + rho_c)
-    coeff_rc  = rho_c / (rho + rho_c)
-
-    # constants for stopping
-    sqrt_pri = torch.sqrt(torch.tensor(2.0 * N_total * n, dtype=dtype, device=device))
+    sqrt_pri = torch.sqrt(torch.tensor(float(N_total * n), dtype=dtype, device=device))
     sqrt_dual = sqrt_pri
 
     for k in range(max_iter):
         Z_i_old = Z_i.clone()
 
+        # lambda-update:
+        # (I + rho A A^T) lambda = -b + rho A(z - u)
+        rhs = -B_local + rho * torch.bmm(
+            A_local, (Z_i - U).unsqueeze(-1)
+        ).squeeze(-1)
 
-        rhs = -B_local + rho * torch.bmm(A_local, (Z_i - U).unsqueeze(-1)).squeeze(-1)
-        Lambda_new = torch.cholesky_solve(rhs.unsqueeze(-1), L).squeeze(-1)
+        Lambda = torch.cholesky_solve(rhs.unsqueeze(-1), L).squeeze(-1)
 
-        A_T_lambda = torch.bmm(A_T, Lambda_new.unsqueeze(-1)).squeeze(-1)
+        # local A_i^T lambda_i
+        A_T_lambda = torch.bmm(A_T, Lambda.unsqueeze(-1)).squeeze(-1)
 
-        Z_i = coeff_rho * (A_T_lambda + U) + coeff_rc * (Z - V)
+        # sharing projection:
+        # v_i = A_i^T lambda_i + u_i
+        V_local = A_T_lambda + U
 
-        sum_local = (Z_i + V).sum(dim=0)  # (n,)
-        allreduce_sum_(sum_local)
-        Z = torch.clamp(sum_local / float(N_total), min=0.0)
+        # global average vbar = (1/N) sum_i v_i
+        V_sum = V_local.sum(dim=0)
+        allreduce_sum_(V_sum)
+        V_bar = V_sum / float(N_total)
 
-        U_new = U + (A_T_lambda - Z_i)
-        V_new = V + (Z_i - Z)
+        # z_i = v_i - vbar + [vbar]_+
+        Z_i = V_local - V_bar.unsqueeze(0) + torch.clamp(V_bar, min=0.0).unsqueeze(0)
 
-        r1 = A_T_lambda - Z_i
-        r2 = Z_i - Z
+        # scaled dual update
+        U = U + A_T_lambda - Z_i
 
-        r_sq_local = torch.linalg.norm(r1, "fro") ** 2 + torch.linalg.norm(r2, "fro") ** 2
+        # primal residual: A_i^T lambda_i - z_i
+        r_local = A_T_lambda - Z_i
+        r_sq_local = torch.linalg.norm(r_local, "fro") ** 2
         r_sq = r_sq_local.clone()
         allreduce_sum_(r_sq)
         r_norm = torch.sqrt(r_sq)
 
-        # dual residual (approx)
-        dZ = (Z_i - Z_i_old)
-        s_local = rho * torch.linalg.norm(torch.bmm(A_local, dZ.unsqueeze(-1)).squeeze(-1), "fro")
+        # dual residual: rho * A_i (z_i^k - z_i^{k-1})
+        dZ = Z_i - Z_i_old
+        s_local = rho * torch.linalg.norm(
+            torch.bmm(A_local, dZ.unsqueeze(-1)).squeeze(-1), "fro"
+        )
         s_sq = (s_local ** 2).clone()
         allreduce_sum_(s_sq)
         s_norm = torch.sqrt(s_sq)
 
-        # thresholds
+        # stopping thresholds
         max_term_pri_local = (
-            torch.linalg.norm(A_T_lambda, "fro") ** 2 +
-            torch.linalg.norm(Z_i, "fro") ** 2 +
-            torch.linalg.norm(Z, 2) ** 2
+            torch.linalg.norm(A_T_lambda, "fro") ** 2
+            + torch.linalg.norm(Z_i, "fro") ** 2
         )
         max_term_pri = max_term_pri_local.clone()
         allreduce_sum_(max_term_pri)
@@ -223,37 +208,44 @@ def nnls_dual_admm_batch_distributed(
 
         e_pri = sqrt_pri * eps_abs + eps_rel * max_term_pri
 
-        max_term_dual_local = (
-            (rho * torch.linalg.norm(U_new, "fro")) ** 2 +
-            (rho_c * torch.linalg.norm(V_new, "fro")) ** 2
-        )
+        max_term_dual_local = (rho * torch.linalg.norm(U, "fro")) ** 2
         max_term_dual = max_term_dual_local.clone()
         allreduce_sum_(max_term_dual)
         max_term_dual = torch.sqrt(max_term_dual)
 
         e_dual = sqrt_dual * eps_abs + eps_rel * max_term_dual
 
-        # update
-        Lambda, U, V = Lambda_new, U_new, V_new
-
         if verbose and get_rank() == 0 and (k % 100 == 0 or k == max_iter - 1):
-            print(f"iter {k+1:4d} | r={r_norm.item():.3e}, s={s_norm.item():.3e}, "
-                  f"e_pri={e_pri.item():.3e}, e_dual={e_dual.item():.3e}")
+            coupling_violation = torch.linalg.norm(
+                torch.minimum(V_sum, torch.zeros_like(V_sum)), ord=float("inf")
+            )
+            print(
+                f"iter {k+1:4d} | r={r_norm.item():.3e}, "
+                f"s={s_norm.item():.3e}, "
+                f"e_pri={e_pri.item():.3e}, e_dual={e_dual.item():.3e}, "
+                f"raw_coupling_viol={coupling_violation.item():.3e}"
+            )
 
         if (r_norm <= e_pri) and (s_norm <= e_dual):
             if verbose and get_rank() == 0:
                 print(f"Converged at iteration {k+1}.")
             break
 
+    # Compute mu = sum_i A_i^T lambda_i.
+    mu_local = A_T_lambda.sum(dim=0)
+    allreduce_sum_(mu_local)
+    mu = torch.clamp(mu_local, min=0.0)
+
     return {
-        "Lambda_local": Lambda,  # local only
-        "Z": Z,                  # global consensus on each rank
+        "Lambda_local": Lambda,
+        "Z_i_local": Z_i,
+        "mu": mu,
         "iters": torch.tensor(k + 1, device=device),
     }
 
 
 # ==========================================================
-# 4) Demo / test
+# 4) Test
 # ==========================================================
 def main():
     rank, world_size, local_rank = setup_distributed_from_env()
@@ -297,15 +289,13 @@ def main():
         A_local, B_local,
         N_total=N,
         rho=1.0,
-        rho_c=1.0,
         max_iter=10000,
         eps_abs=1e-8,
         eps_rel=1e-8,
         verbose=True,
     )
 
-    Z = out["Z"]  # on each rank
-
+    mu = out["mu"]
 
     if rank == 0:
         A_np = A_full.cpu().numpy()
@@ -315,12 +305,11 @@ def main():
         x_cvx = cvx["x_star"]
         mu_cvx = cvx['mu_kkt']
 
-        # Build mu from Z (KKT multiplier proxy), then recover x by your method
-        Z_np = Z.detach().cpu().numpy()
-        mu_from_Z = np.maximum(0.0, A_np.T @ (A_np @ Z_np - b_np))
-        x_rec = recover_x_from_mu_active_set(A_np, b_np, mu_from_Z, tau=1e-5, max_refine=2000)
+        mu_np = mu.detach().cpu().numpy()
+        x_rec = recover_x_from_mu_active_set(
+            A_np, b_np, mu_np, tau=1e-5, max_refine=2000
+        )
 
-        # Compare
         def obj_half(x):
             r = A_np @ x - b_np
             return 0.5 * float(r @ r)
@@ -329,9 +318,9 @@ def main():
         print(f"  status = {cvx['status']}")
         print(f"  obj(x_cvx) = {obj_half(x_cvx):.6e}")
 
-        print("\n[ADMM Consensus Z]")
-        # print(f"  obj(Z)      = {obj_half(Z_np):.6e}")
-        print(f"  ||Z - x_cvx||_2 = {np.linalg.norm(Z_np - mu_cvx):.6e}")
+        print("\n[ADMM Dual Multiplier]")
+        print(f"  ||mu_admm - mu_cvx||_2 = {np.linalg.norm(mu_np - mu_cvx):.6e}")
+        print(f"  dual feasibility violation = {np.linalg.norm(np.minimum(mu_np, 0.0), ord=np.inf):.6e}")
 
         print("\n[Recovered x via mu(active-set)]")
         print(f"  obj(x_rec)  = {obj_half(x_rec):.6e}")
