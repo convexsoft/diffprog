@@ -39,8 +39,9 @@ The following software and libraries are required:
 │   ├── diet_dladmm_learning_with_cvxpy.py
 │   ├── diet_dladmm_with_cvxpy.py
 │   ├── diet_pdhg_with_cvxpy.py
+│   ├── diet_with_cvxpylayers.py
 │   ├── diet_with_moreau_vs_cvxpy.py
-│   │   (Four methods for solving the Stigler Diet problem.)
+│   │   (Five methods for solving the Stigler Diet problem.)
 │   ├── nnv_with_cvxpy.py
 │   │   (Solving the neural network verification problem.)
 │   ├── sumrate_with_moreau_vs_cvxpy.py
