@@ -27,13 +27,17 @@ The following software and libraries are required:
 │   └── nnls_signal_recovery_cvxpylayers_with_moreau_as_solver_gpu.py
 │       (Differentiable NNLS signal recovery using CVXPYLayers with Moreau backend.)
 │
+├── nnls_signal_recovery/
+│   └── nnls_signal_recovery_with_cvxpylayers.py
+│       (Differentiable NNLS signal recovery using CVXPYLayers.)
+|
 ├── nnls_pytorch/
 │   ├── nnls_dual_admm_with_pytorch.py
 │   │   (PyTorch implementation of the dual-form ADMM solver for NNLS.)
 │   ├── nnls_dual_loss_learning_refer_to_cvxpy_with_pytorch.py
 │   │   (Learning framework for NNLS using CVXPY solutions as references.)
 │   └── nnls_dual_multiGPU_admm_with_pytorch.py
-│       (Multi-GPU ADMM implementation for large-scale NNLS.)
+│       (GPU-Based ADMM implementation for large-scale NNLS.)
 │
 ├── case_studies/
 │   ├── diet_dladmm_learning_with_cvxpy.py
@@ -42,10 +46,13 @@ The following software and libraries are required:
 │   ├── diet_with_cvxpylayers.py
 │   ├── diet_with_moreau_vs_cvxpy.py
 │   │   (Five methods for solving the Stigler Diet problem.)
+|   ├── lossless_with_cvxpy_vs_cvxpylayers.py
+│   │   (Solving the nonconvex optimal control problem via lossless convexification.)
 │   ├── nnv_with_cvxpy.py
 │   │   (Solving the neural network verification problem.)
 │   ├── sumrate_with_moreau_vs_cvxpy.py
-│   │   (Solving the sum-rate maximization problem using CVXPYLayers with Moreau backend.)
+│   ├── sumrate_with_cvxpylayers.py
+│   │   (Solving the sum-rate maximization problem.)
 │   ├── opf_with_cvxpy.py
 │   ├── opf_with_pd_moreau_cvxpy.py
 │   │   (Solving the optimal power flow problem via CVXPY and Moreau.)
